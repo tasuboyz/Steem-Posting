@@ -181,58 +181,337 @@
             return Math.min(...recentLows);
         }
 
+        function calculateKeyResistance(candleData) {
+        // Assicuriamoci di avere abbastanza dati
+        if (!candleData || candleData.length < 20) {
+            return null;
+        }
+
+        // Ultimi n periodi per l'analisi
+        const lookbackPeriod = 20;
+        const recentData = candleData.slice(-lookbackPeriod);
+
+        // 1. Trova i massimi locali
+        const localHighs = findLocalHighs(recentData);
+
+        // 2. Calcola il Volume Profile
+        const volumeProfile = calculateVolumeProfile(recentData);
+
+        // 3. Identifica cluster di prezzi con alto volume
+        const volumeClusters = findVolumeClusters(volumeProfile);
+
+        // 4. Calcola la media mobile esponenziale
+        const ema = calculateEMA(recentData, 20);
+
+        // Funzione per trovare i massimi locali
+        function findLocalHighs(data) {
+            const highs = [];
+            for (let i = 1; i < data.length - 1; i++) {
+                if (data[i].high > data[i-1].high && 
+                    data[i].high > data[i+1].high) {
+                    highs.push(data[i].high);
+                }
+            }
+            return highs;
+        }
+
+        // Funzione per calcolare il Volume Profile
+        function calculateVolumeProfile(data) {
+            const priceVolumes = {};
+            const priceStep = 100; // Raggruppa i prezzi in step di $100
+
+            data.forEach(candle => {
+                const avgPrice = (candle.high + candle.low) / 2;
+                const priceLevel = Math.floor(avgPrice / priceStep) * priceStep;
+                
+                if (!priceVolumes[priceLevel]) {
+                    priceVolumes[priceLevel] = 0;
+                }
+                priceVolumes[priceLevel] += candle.volume;
+            });
+
+            return priceVolumes;
+        }
+
+        // Funzione per trovare cluster di volume
+        function findVolumeClusters(volumeProfile) {
+            const clusters = [];
+            const entries = Object.entries(volumeProfile);
+            
+            // Ordina per volume
+            entries.sort((a, b) => b[1] - a[1]);
+            
+            // Prendi i top 3 livelli di prezzo con maggior volume
+            return entries.slice(0, 3).map(entry => parseFloat(entry[0]));
+        }
+
+        // Funzione per calcolare EMA
+        function calculateEMA(data, period) {
+            const multiplier = 2 / (period + 1);
+            let ema = data[0].close;
+
+            for (let i = 1; i < data.length; i++) {
+                ema = (data[i].close - ema) * multiplier + ema;
+            }
+
+            return ema;
+        }
+
+        // Combina i diversi metodi per trovare la resistenza più probabile
+        const lastPrice = recentData[recentData.length - 1].close;
+        let resistanceLevels = [];
+
+        // Aggiungi i massimi locali sopra il prezzo attuale
+        resistanceLevels = resistanceLevels.concat(
+            localHighs.filter(high => high > lastPrice)
+        );
+
+        // Aggiungi i cluster di volume sopra il prezzo attuale
+        resistanceLevels = resistanceLevels.concat(
+            volumeClusters.filter(cluster => cluster > lastPrice)
+        );
+
+        // Aggiungi EMA se sopra il prezzo attuale
+        if (ema > lastPrice) {
+            resistanceLevels.push(ema);
+        }
+
+        // Trova la resistenza più vicina al prezzo attuale
+        if (resistanceLevels.length === 0) {
+            // Se non troviamo resistenze, usa il massimo recente più un margine
+            return Math.max(...recentData.map(d => d.high)) * 1.02;
+        }
+
+        resistanceLevels.sort((a, b) => a - b);
+        return resistanceLevels.find(level => level > lastPrice) || 
+            resistanceLevels[resistanceLevels.length - 1];
+    }
+
+    function calculateVolumeChange(candleData) {
+        // Verifica che ci siano abbastanza dati
+        if (!candleData || candleData.length < 2) {
+            return 0;
+        }
+
+        // Ottieni i dati più recenti
+        const currentPeriod = candleData[candleData.length - 1];
+        
+        // Calcola la media del volume degli ultimi 7 periodi per un confronto più stabile
+        const volumeMA7 = candleData
+            .slice(-8, -1) // Prendi gli ultimi 7 periodi prima di quello corrente
+            .reduce((acc, candle) => acc + candle.volume, 0) / 7;
+
+        // Calcola la variazione percentuale
+        const volumeChange = ((currentPeriod.volume - volumeMA7) / volumeMA7) * 100;
+
+        // Limita i valori estremi per evitare percentuali eccessive
+        return Math.min(Math.max(volumeChange, -100), 500);
+    }
+
+    function calculateTrendStrength(candleData) {
+    // Verifica che ci siano abbastanza dati
+    if (!candleData || candleData.length < 14) {
+        return 50; // Valore neutro se non ci sono abbastanza dati
+    }
+
+    // Parametri per il calcolo
+    const shortPeriod = 14;
+    const lookbackPeriods = Math.min(candleData.length, 50);
+    const recentData = candleData.slice(-lookbackPeriods);
+
+    // Calcola diversi indicatori di trend
+    const adxValue = calculateADX(recentData, shortPeriod);
+    const priceStrength = calculatePriceStrength(recentData);
+    const volumeStrength = calculateVolumeStrength(recentData);
+    const maStrength = calculateMAStrength(recentData);
+
+    // Funzione per calcolare ADX (Average Directional Index)
+    function calculateADX(data, period) {
+        let trueRanges = [];
+        let posDM = [];
+        let negDM = [];
+
+        // Calcola TR e DM
+        for (let i = 1; i < data.length; i++) {
+            const high = data[i].high;
+            const low = data[i].low;
+            const prevHigh = data[i-1].high;
+            const prevLow = data[i-1].low;
+            const prevClose = data[i-1].close;
+
+            // True Range
+            const tr1 = high - low;
+            const tr2 = Math.abs(high - prevClose);
+            const tr3 = Math.abs(low - prevClose);
+            const tr = Math.max(tr1, tr2, tr3);
+            trueRanges.push(tr);
+
+            // Directional Movement
+            const upMove = high - prevHigh;
+            const downMove = prevLow - low;
+
+            if (upMove > downMove && upMove > 0) {
+                posDM.push(upMove);
+                negDM.push(0);
+            } else if (downMove > upMove && downMove > 0) {
+                posDM.push(0);
+                negDM.push(downMove);
+            } else {
+                posDM.push(0);
+                negDM.push(0);
+            }
+        }
+
+        // Calcola le medie
+        const atr = calculateEMA(trueRanges, period);
+        const posDI = (calculateEMA(posDM, period) / atr) * 100;
+        const negDI = (calculateEMA(negDM, period) / atr) * 100;
+
+        // Calcola ADX
+        const dx = Math.abs(posDI - negDI) / (posDI + negDI) * 100;
+        return dx;
+    }
+
+    // Calcola la forza del prezzo basata sui movimenti recenti
+    function calculatePriceStrength(data) {
+        const closes = data.map(d => d.close);
+        const priceChange = ((closes[closes.length - 1] - closes[0]) / closes[0]) * 100;
+        return normalizeTrendValue(priceChange, 30);
+    }
+
+    // Calcola la forza del volume
+    function calculateVolumeStrength(data) {
+        const recentVolume = data.slice(-7).reduce((acc, d) => acc + d.volume, 0);
+        const previousVolume = data.slice(-14, -7).reduce((acc, d) => acc + d.volume, 0);
+        const volumeChange = ((recentVolume - previousVolume) / previousVolume) * 100;
+        return normalizeTrendValue(volumeChange, 50);
+    }
+
+    // Calcola la forza delle medie mobili
+    function calculateMAStrength(data) {
+        const ma20 = calculateSMA(data.map(d => d.close), 20);
+        const ma50 = calculateSMA(data.map(d => d.close), 50);
+        const currentPrice = data[data.length - 1].close;
+        
+        let strength = 50;
+        if (currentPrice > ma20 && ma20 > ma50) strength += 25;
+        if (currentPrice < ma20 && ma20 < ma50) strength -= 25;
+        
+        return strength;
+    }
+
+    // Funzioni di utilità
+    function calculateEMA(data, period) {
+        const k = 2 / (period + 1);
+        let ema = data[0];
+        for (let i = 1; i < data.length; i++) {
+            ema = data[i] * k + ema * (1 - k);
+        }
+        return ema;
+    }
+
+    function calculateSMA(data, period) {
+        return data.slice(-period).reduce((sum, val) => sum + val, 0) / period;
+    }
+
+    function normalizeTrendValue(value, maxChange) {
+        return 50 + Math.min(Math.max(value / maxChange * 50, -50), 50);
+    }
+
+    // Combina tutti gli indicatori per ottenere la forza finale del trend
+    const trendStrength = (
+        adxValue * 0.3 +
+        priceStrength * 0.3 +
+        volumeStrength * 0.2 +
+        maStrength * 0.2
+    );
+
+    // Normalizza il risultato finale tra 0 e 100
+    return Math.min(Math.max(trendStrength, 0), 100);
+}
+
         async function updatePersonalConsiderations() {
             const binanceData = await fetchBinanceData();
             const lastCandle = binanceData[binanceData.length - 1];
             const priceChangePercentage = ((lastCandle.close - lastCandle.open) / lastCandle.open) * 100;
             const fearGreedIndex = await fetchFearAndGreedData();
             const rsiValue = calculateRSI(binanceData).slice(-1)[0].value;
-            const macdValue = calculateMACD(binanceData).slice(-1)[0].histogram;
-
+            const macdValue = calculateMACD(binanceData).slice(-1)[0];
             const kijunSen = calculateKijunSen(binanceData);
             const bitcoinVolatility = calculateVolatility(binanceData);
             const keySupport = calculateKeySupport(binanceData);
+            const keyResistance = calculateKeyResistance(binanceData);
+            const volumeChange = calculateVolumeChange(binanceData);
+            const trendStrength = calculateTrendStrength(binanceData);
 
-            let considerations = "Attualmente, il prezzo di Bitcoin si attesta a $" + lastCandle.close.toFixed(2) + 
-                                ", con una variazione del " + priceChangePercentage.toFixed(2) + "% rispetto all'apertura. ";
+            let considerations = '';
 
+            // Analisi del prezzo e del contesto di mercato
+            considerations += `Bitcoin sta attraversando una fase di ${Math.abs(priceChangePercentage) > 5 ? 'significativa ' : 'moderata '}`;
+            considerations += `${priceChangePercentage > 0 ? 'crescita' : 'correzione'} del ${Math.abs(priceChangePercentage).toFixed(2)}%. `;
+
+            // Analisi del sentiment e volume
+            if (volumeChange > 50) {
+                considerations += `Il notevole aumento del volume (${volumeChange.toFixed(2)}%) suggerisce un forte interesse da parte del mercato. `;
+            } else if (volumeChange < -50) {
+                considerations += `Il calo significativo del volume (${volumeChange.toFixed(2)}%) potrebbe indicare un temporaneo disinteresse degli investitori. `;
+            }
+
+            // Analisi tecnica combinata
+            let technicalSignals = 0;
+            technicalSignals += (rsiValue > 50) ? 1 : -1;
+            technicalSignals += (macdValue.histogram > 0) ? 1 : -1;
+            technicalSignals += (lastCandle.close > kijunSen) ? 1 : -1;
+
+            if (Math.abs(technicalSignals) >= 2) {
+                considerations += `L'analisi tecnica mostra una convergenza di segnali ${technicalSignals > 0 ? 'costruttivi' : 'cauti'}. `;
+            } else {
+                considerations += `Gli indicatori tecnici mostrano segnali contrastanti, suggerendo una fase di incertezza. `;
+            }
+
+            // Analisi della volatilità e del rischio
+            if (bitcoinVolatility > 4) {
+                considerations += `L'elevata volatilità (${bitcoinVolatility.toFixed(2)}%) richiede particolare attenzione nella gestione del rischio. `;
+            } else if (bitcoinVolatility < 2) {
+                considerations += `La bassa volatilità (${bitcoinVolatility.toFixed(2)}%) potrebbe precedere un movimento significativo. `;
+            }
+
+            // Analisi dei livelli chiave
+            const priceToSupport = ((lastCandle.close - keySupport) / keySupport) * 100;
+            const priceToResistance = ((keyResistance - lastCandle.close) / lastCandle.close) * 100;
+
+            if (priceToSupport < 3) {
+                considerations += `Il prezzo sta testando un importante supporto a $${keySupport.toFixed(2)}. `;
+            } else if (priceToResistance < 3) {
+                considerations += `Il prezzo si sta avvicinando alla resistenza a $${keyResistance.toFixed(2)}. `;
+            }
+
+            // Contestualizzazione del Fear & Greed Index
             if (fearGreedIndex < 20) {
-                considerations += "Questo è un momento di 'paura estrema', il che storicamente suggerisce che potrebbe essere un buon punto di accumulo per gli investitori a lungo termine. ";
+                considerations += `Il sentiment estremamente negativo (${fearGreedIndex}) spesso precede opportunità di accumulo, ma richiede pazienza e gradualità. `;
             } else if (fearGreedIndex > 80) {
-                considerations += "Con un indice di 'avidità estrema', potremmo trovarci in una fase di correzione imminente, quindi è importante essere cauti. ";
+                considerations += `L'eccessivo ottimismo (${fearGreedIndex}) suggerisce di valutare attentamente i rischi di correzione. `;
             } else {
-                considerations += "L'indice di paura e avidità si attesta a " + fearGreedIndex + ", indicando una situazione di mercato più equilibrata. ";
+                considerations += `Il sentiment di mercato (${fearGreedIndex}) è in una fase di equilibrio. `;
             }
 
-            if (rsiValue > 70) {
-                considerations += "Attualmente, l'RSI è a " + rsiValue.toFixed(2) + ", suggerendo che Bitcoin è in una condizione di 'ipercomprato', il che potrebbe indicare una correzione a breve termine. ";
-            } else if (rsiValue < 30) {
-                considerations += "Con un RSI di " + rsiValue.toFixed(2) + ", Bitcoin è considerato 'ipervenduto', suggerendo che potrebbe esserci spazio per un rimbalzo. ";
+            // Conclusione dinamica basata sulla forza del trend
+            if (trendStrength > 70) {
+                considerations += `La forza del trend attuale suggerisce di monitorare attentamente i livelli di ritracciamento per eventuali opportunità.`;
+            } else if (trendStrength < 30) {
+                considerations += `La debolezza del trend consiglia di attendere conferme prima di prendere decisioni significative.`;
             } else {
-                considerations += "L'RSI attuale è di " + rsiValue.toFixed(2) + ", il che indica una situazione di mercato neutra. ";
+                considerations += `In questa fase di mercato, è consigliabile mantenere un approccio equilibrato e attendere segnali più chiari.`;
             }
 
-            if (macdValue > 0) {
-                considerations += "Inoltre, l'analisi MACD mostra un valore positivo, suggerendo una momentum rialzista. ";
-            } else {
-                considerations += "Il valore negativo del MACD indica una momentum ribassista, il che richiede attenzione. ";
-            }
-
-            considerations += "<br><br>Attualmente, il prezzo di Bitcoin si attesta a $" + lastCandle.close.toFixed(4) + 
-                             ", al di sotto del Kijun-sen di $" + kijunSen.toFixed(4) + ". Questo suggerisce una potenziale fase ribassista. " +
-                             "Con una volatilità del " + bitcoinVolatility.toFixed(2) + "%, il rischio di movimenti verso il basso rimane elevato. " +
-                             "È fondamentale prestare attenzione al supporto chiave a $" + keySupport.toFixed(4) + " e valutare eventuali segnali di inversione. ";
-
-            considerations += "Per ora, è consigliabile essere cauti e osservare se il prezzo riesce a trovare supporto o se continuerà a scendere verso livelli inferiori.";
-
-            document.getElementById("personalConsiderations").innerHTML = considerations
+            document.getElementById("personalConsiderations").innerHTML = considerations;
         }
 
         async function fetchBinanceData() {
             try {
                 const endTime = new Date();
                 const startTime = new Date(endTime);
-                startTime.setMonth(startTime.getMonth() - 3);
+                startTime.setMonth(startTime.getMonth() - 2);
                 const startTimestamp = startTime.getTime();
                 
                 const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=4h&startTime=${startTimestamp}`;
@@ -474,7 +753,8 @@
         function updateTechnicalAnalysis(ichimoku, price, rsiData, macdData) {
             const analysis = document.getElementById('technicalAnalysis');
             const items = [];
-            
+
+            // Analisi del Cloud Ichimoku
             if (price.close > ichimoku.senkouSpanA && price.close > ichimoku.senkouSpanB) {
                 items.push("🟢 Forte Rialzo: Il prezzo è sopra il Cloud Ichimoku");
             } else if (price.close < ichimoku.senkouSpanA && price.close < ichimoku.senkouSpanB) {
@@ -483,6 +763,7 @@
                 items.push("🟡 Consolidamento: Il prezzo è all'interno del Cloud Ichimoku");
             }
 
+            // Analisi RSI
             const currentRSI = rsiData[rsiData.length - 1].value;
             if (currentRSI > 70) {
                 items.push(`🔴 Sopravvalutato: RSI a ${currentRSI.toFixed(2)}`);
@@ -492,30 +773,36 @@
                 items.push(`⚪ RSI Neutro: ${currentRSI.toFixed(2)}`);
             }
 
+            // Analisi MACD
             const latestMACD = macdData[macdData.length - 1];
-            if (latestMACD.histogram > 0 && latestMACD.histogram > macdData[macdData.length - 2].histogram) {
+            const previousMACD = macdData[macdData.length - 2];
+            if (latestMACD.histogram > 0 && latestMACD.histogram > previousMACD.histogram) {
                 items.push("🟢 MACD: Momentum rialzista crescente");
-            } else if (latestMACD.histogram < 0 && latestMACD.histogram < macdData[macdData.length - 2].histogram) {
+            } else if (latestMACD.histogram < 0 && latestMACD.histogram < previousMACD.histogram) {
                 items.push("🔴 MACD: Momentum ribassista crescente");
             } else {
                 items.push("🟡 MACD: Momentum in transizione");
             }
 
+            // Calcolo dei segnali rialzisti e ribassisti
             let bullishSignals = 0;
             let bearishSignals = 0;
-            
+
             if (price.close > ichimoku.senkouSpanA) bullishSignals++;
             if (ichimoku.tenkanSen > ichimoku.kijunSen) bullishSignals++;
-            if (currentRSI > 50) bullishSignals++;
+            if (currentRSI > 50 && currentRSI <= 70) bullishSignals++; // RSI neutro o leggermente rialzista
             if (latestMACD.histogram > 0) bullishSignals++;
-            
+
             if (price.close < ichimoku.senkouSpanA) bearishSignals++;
             if (ichimoku.tenkanSen < ichimoku.kijunSen) bearishSignals++;
-            if (currentRSI < 50) bearishSignals++;
+            if (currentRSI < 50 || currentRSI > 70) bearishSignals++; // RSI ribassista o sopravvalutato
             if (latestMACD.histogram < 0) bearishSignals++;
-            
-            items.push(`📊 Trend Generale: ${bullishSignals > bearishSignals ? '🟢 Rialzista' : bearishSignals > bullishSignals ? '🔴 Ribassista' : '🟡 Neutro'} (${bullishSignals} vs ${bearishSignals} segnali)`);
 
+            // Determinazione del trend generale
+            const trend = bullishSignals > bearishSignals ? '🟢 Rialzista' : bearishSignals > bullishSignals ? '🔴 Ribassista' : '🟡 Neutro';
+            items.push(`📊 Trend Generale: ${trend} (${bullishSignals} vs ${bearishSignals} segnali)`);
+
+            // Aggiornamento del DOM
             analysis.innerHTML = items.map(item => `<li>${item}</li>`).join('');
         }
 
